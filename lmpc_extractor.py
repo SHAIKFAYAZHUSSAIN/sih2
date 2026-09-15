@@ -247,7 +247,7 @@ class LMPCExtractor:
             box_height = item["height"]
 
             # Check Net Quantity
-            m_net = re.search(r'(?:Net\s*Qty|Net\s*Quantity|Net\s*Wt|Net\s*Weight|NET\s*QTY)[:.\s]*([0-9]+(?:[.,][0-9]+)?)\s*([a-zA-Z]+)', text, re.I)
+            m_net = re.search(r'(?:Net\s*Qty|Net\s*Quantity|Net\s*Wt|Net\s*Weight|NET\s*QTY)[:.\s]*(?:When\s*Packed\s*)?([0-9]+(?:[.,][0-9]+)?)\s*([a-zA-Z]+)', text, re.I)
             if not m_net:
                 m_net = re.search(r'\b([0-9]+(?:[.,][0-9]+)?)\s*(g|kg|ml|l|L|gms|gm)\b', text, re.I)
             if m_net and not extracted["net_quantity_value"]:
@@ -268,10 +268,15 @@ class LMPCExtractor:
                 add_box("batch", f"Batch: {m_batch.group(1)}", box, "#3b82f6")
                 continue
 
-            # Check Mfg Date
+            # Check Mfg Date (Standard & Tabular Format like #April2026)
             m_mfg = re.search(r'(?:Mfg|Mfd|Pkg|Packed|PKD|DOM|Date\s*of\s*Mfg|Date\s*of\s*Manufacture)[:.\s]*(?:Dt\.?|Date)?[:.\s]*([0-9]{1,2}\s*[-/\.]\s*[0-9]{2,4}|[A-Za-z]{3,9}\s*[-/\s]\s*[0-9]{2,4})', text, re.I)
+            if not m_mfg:
+                m_mfg = re.search(r'(?:#|\bMFD\b|\bMfg\b)?[:.\s]*(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s*([0-9]{4})', text, re.I)
             if m_mfg and not extracted["mfg_date"]:
-                clean_d = re.sub(r'\s*([-/\.])\s*', r'\1', m_mfg.group(1)).strip()
+                if len(m_mfg.groups()) == 2 and m_mfg.group(2):
+                    clean_d = f"{m_mfg.group(1)} {m_mfg.group(2)}"
+                else:
+                    clean_d = re.sub(r'\s*([-/\.])\s*', r'\1', m_mfg.group(1)).strip()
                 extracted["mfg_date"] = clean_d
                 add_box("mfg_date", f"Mfg Date: {clean_d}", box, "#10b981")
                 continue
@@ -284,19 +289,24 @@ class LMPCExtractor:
                 add_box("exp_date", f"Exp Date: {clean_d}", box, "#10b981")
                 continue
 
-            # Check MRP (Support Rs, INR, ₹, OCR misspellings like HRP, MBP, MAP)
+            # Check MRP (Support Rs, INR, ₹, OCR misspellings like HRP, MBP, MAP, and Indian /- notation)
             m_mrp = re.search(r'(?:M\.?\s*R\.?\s*P\.?|MAX(?:IMUM)?\.?\s*RETAIL\s*PRICE|[HMN]RP)[:.\s]*(?:\(?(?:incl(?:usive)?\.?\s*(?:of)?\s*all\s*taxes)\)?)?[:.\s]*(?:Rs\.?|INR|₹|\u20b9)?\s*([0-9]+(?:[.,][0-9]{1,2})?)', text, re.I)
+            if not m_mrp and re.search(r'(?:^|\s|\*|[₹]|Rs\.?)\s*([0-9]+(?:\.[0-9]{1,2})?)\s*(?:\/-|\/)', text):
+                if not any(k in text.lower() for k in ["lic", "cos", "b.no", "batch", "iso"]):
+                    m_mrp = re.search(r'(?:^|\s|\*|[₹]|Rs\.?)\s*([0-9]+(?:\.[0-9]{1,2})?)\s*(?:\/-|\/)', text)
             if m_mrp and m_mrp.group(1) and not extracted["mrp_value"]:
                 extracted["mrp_raw"] = text.replace("₹", "Rs. ")
                 try:
                     extracted["mrp_value"] = float(m_mrp.group(1).replace(',', '.'))
                 except Exception:
                     pass
-                add_box("mrp", f"MRP: Rs. {m_mrp.group(1)}", box, "#3b82f6")
+                add_box("mrp", f"MRP: Rs. {m_mrp.group(1)}", box, "#10b981")
                 continue
 
-            # Check USP
+            # Check USP (Support standard and tabular format like @0.66perg)
             m_usp = re.search(r'(?:U\.?\s*S\.?\s*P\.?|UNIT\s*SALE\s*PRICE)[:.\s]*(?:Rs\.?|INR|₹|\u20b9)?\s*([0-9]+(?:[.,][0-9]{1,2})?)\s*(?:per|\/)?\s*([a-zA-Z]+)?', text, re.I)
+            if not m_usp:
+                m_usp = re.search(r'(?:@|\bUSP\b)[:.\s]*(?:Rs\.?|INR|₹|\u20b9)?\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:per|\/)\s*([a-zA-Z]+)', text, re.I)
             if m_usp and m_usp.group(1) and not extracted["unit_sale_price_value"]:
                 extracted["unit_sale_price_raw"] = text.replace("₹", "Rs. ")
                 try:
@@ -304,17 +314,43 @@ class LMPCExtractor:
                 except Exception:
                     pass
                 unit_str = m_usp.group(2) or "g"
-                add_box("usp", f"USP: Rs. {m_usp.group(1)}/{unit_str}", box, "#3b82f6")
+                add_box("usp", f"USP: Rs. {m_usp.group(1)}/{unit_str}", box, "#10b981")
                 continue
 
-            # Check Manufacturer Name
+            # Check Generic / Common Name (e.g. Toilet Soap, Bathing Bar, Biscuit)
+            m_gen_item = re.search(r'\b(Toilet\s*Soap(?:[*\s-]*Grade\s*[0-9]+)?|Bathing\s*Bar|Soap|Detergent|Biscuits?|Namkeen|Atta|Flour|Refined\s*Oil|Mustard\s*Oil|Edible\s*Oil|Toothpaste|Shampoo|Tea|Coffee|Spices|Salt|Sugar|Milk|Ghee|Butter|Paneer)\b', text, re.I)
+            if m_gen_item and not extracted["generic_name"]:
+                clean_gen = re.sub(r'[*]', ' ', m_gen_item.group(0)).strip()
+                extracted["generic_name"] = clean_gen
+                extracted["commodity_name"] = clean_gen
+                add_box("generic_name", f"Generic: {clean_gen}", box, "#10b981")
+
+            # Check Manufacturer Name (Explicit Prefix or Corporate Entity)
             m_mfr = re.search(r'(?:Mfd\s*by|Manufactured\s*by|Marketed\s*by|Packed\s*by|Mfg\s*by)[:.\s]*(.+)', text, re.I)
             if m_mfr and not extracted["manufacturer_name"]:
                 val = m_mfr.group(1).strip()
-                if len(val) > 3 and not any(k in val.lower() for k in ["mrp", "date", "batch", "qty", "table"]):
+                if len(val) > 3 and not any(k in val.lower() for k in ["mrp", "date", "batch", "qty", "table", "contact", "pro"]):
                     extracted["manufacturer_name"] = val
                     add_box("mfr", f"Mfr: {val[:20]}", box, "#10b981")
                     continue
+            elif not extracted["manufacturer_name"] and re.search(r'\b(?:Limited|Ltd|Pvt|Company|Corporation|Enterprises|Industries)\b', text, re.I):
+                if not any(k in text.lower() for k in ["iso", "customer", "feedback", "mrp", "date", "batch", "complaint", "cos"]):
+                    extracted["manufacturer_name"] = text.strip()
+                    add_box("mfr", f"Mfr: {text.strip()[:20]}", box, "#10b981")
+                    continue
+
+            # Check Postal Address & PIN Code
+            if re.search(r'\b[1-9][0-9]{5}\b', text) or re.search(r'\b(?:Highway|Industrial\s*Suburb|Malleshwaram|Road|Street|Plot|Sector)\b', text, re.I):
+                if not extracted["manufacturer_address"]:
+                    extracted["manufacturer_address"] = text.strip()
+                elif text.strip() not in extracted["manufacturer_address"]:
+                    extracted["manufacturer_address"] += f", {text.strip()}"
+                extracted["consumer_care_address"] = extracted["manufacturer_address"]
+                add_box("addr", "Mfr Address", box, "#10b981")
+
+            # Check Country of Origin
+            if re.search(r'\b(?:India|Bharat)\b', text, re.I) and not extracted["country_of_origin"]:
+                extracted["country_of_origin"] = "India"
 
             # Check Consumer Care Phone
             m_phone = re.search(r'(?:1800[- ]?[0-9]{3}[- ]?[0-9]{3,4}|\b[6-9][0-9]{9}\b)', text)
@@ -376,8 +412,8 @@ class LMPCExtractor:
                     pass
 
         # Check full combined text for missing multi-line tax clause in MRP
-        if extracted["mrp_raw"] and not re.search(r"incl(?:usive)?\s*(?:of)?\s*all\s*taxes", extracted["mrp_raw"], re.I):
-            if re.search(r"incl(?:usive)?\s*(?:of)?\s*all\s*taxes", full_ocr_text, re.I):
+        if extracted["mrp_raw"] and not re.search(r"incl[a-z,.\s]*tax", extracted["mrp_raw"], re.I):
+            if re.search(r"incl[a-z,.\s]*tax", full_ocr_text, re.I):
                 extracted["mrp_raw"] += " (inclusive of all taxes)"
 
         # Verify USP Mathematical consistency
@@ -430,6 +466,7 @@ class LMPCExtractor:
     def _parse_date(self, date_str: str) -> Optional[datetime]:
         if not date_str: return None
         date_str = re.sub(r'\s*([-/\.])\s*', r'\1', date_str.strip())
+        date_str = re.sub(r'([a-zA-Z]+)([0-9]{4})', r'\1 \2', date_str)
         for p in ["%m/%Y", "%m/%y", "%b %Y", "%B %Y", "%m-%Y", "%b-%Y", "%m.%Y", "%d/%m/%Y", "%d-%m-%Y"]:
             try:
                 return datetime.strptime(date_str, p)

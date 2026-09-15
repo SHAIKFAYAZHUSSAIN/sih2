@@ -211,7 +211,7 @@ class LMPCRuleEngine:
             ))
         else:
             # Check mandatory "inclusive of all taxes" clause
-            if not re.search(r"incl(?:usive)?\s*(?:of)?\s*all\s*taxes", mrp_raw, re.IGNORECASE):
+            if not re.search(r"incl[a-z,.\s]*tax", mrp_raw, re.IGNORECASE):
                 violations.append(Violation(
                     rule_id="RULE_6_1_E_TAX_CLAUSE",
                     rule_reference="Rule 6(1)(e)",
@@ -394,6 +394,7 @@ class LMPCRuleEngine:
         if not date_str: return None
         # Clean whitespace inside date like '12 - 2024' -> '12-2024'
         date_str = re.sub(r'\s*([-/\.])\s*', r'\1', date_str.strip())
+        date_str = re.sub(r'([a-zA-Z]+)([0-9]{4})', r'\1 \2', date_str)
         patterns = ["%m/%Y", "%m/%y", "%b %Y", "%B %Y", "%m-%Y", "%b-%Y", "%m.%Y", "%d/%m/%Y", "%d-%m-%Y"]
         for p in patterns:
             try:
