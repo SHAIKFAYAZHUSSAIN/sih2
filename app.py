@@ -7,7 +7,7 @@ Problem Statement: SIH 26034
 import os
 import shutil
 from typing import Optional
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -73,6 +73,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def vercel_path_normalization(request: Request, call_next):
+    """
+    Normalizes ASGI request paths across various Vercel deployment modes:
+    - Zero-config api/index.py routing
+    - vercel.json routes and rewrites
+    - Injected edge headers (x-matched-path, x-forwarded-uri)
+    """
+    # 1. Check if Vercel edge injected the original matched URL path
+    for header_name in ("x-matched-path", "x-forwarded-uri", "x-original-uri", "x-rewrite-url"):
+        header_val = request.headers.get(header_name)
+        if header_val and not header_val.startswith("/api/index"):
+            request.scope["path"] = header_val.split("?")[0]
+            break
+            
+    # 2. Normalize function path prefixes if request arrived via api/index.py
+    p = request.scope.get("path", "")
+    if p in ("/api/index.py", "/api/index", "/api/index/", ""):
+        request.scope["path"] = "/"
+    elif p.startswith("/api/index.py/"):
+        request.scope["path"] = p[len("/api/index.py"):]
+    elif p.startswith("/api/index/"):
+        request.scope["path"] = p[len("/api/index"):]
+
+    return await call_next(request)
+
 # Mount static directory for sample assets if physical folder exists
 if os.path.exists(STATIC_DIR):
     try:
@@ -113,6 +139,9 @@ async def health_check():
     }
 
 @app.get("/", response_class=HTMLResponse)
+@app.get("/api/index.py", response_class=HTMLResponse)
+@app.get("/api/index", response_class=HTMLResponse)
+@app.get("/api", response_class=HTMLResponse)
 async def serve_dashboard():
     return HTMLResponse(content=get_dashboard_html())
 
